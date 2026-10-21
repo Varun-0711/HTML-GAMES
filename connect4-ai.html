@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Connect 4 vs AI</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #1d3557;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    color: white;
+    padding: 20px;
+  }
+  h1 { margin-bottom: 5px; }
+  #subtitle {
+    color: #a8dadc;
+    margin-bottom: 15px;
+    font-size: 14px;
+  }
+  #stats {
+    display: flex;
+    gap: 30px;
+    font-size: 18px;
+    margin-bottom: 15px;
+  }
+  #board {
+    background: #457b9d;
+    padding: 12px;
+    border-radius: 12px;
+    display: grid;
+    grid-template-columns: repeat(7, 60px);
+    grid-template-rows: repeat(6, 60px);
+    gap: 8px;
+    position: relative;
+  }
+  .cell {
+    width: 60px;
+    height: 60px;
+    background: #1d3557;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: visible;
+  }
+  .cell.filled { cursor: default; }
+  .disc {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    will-change: transform;
+  }
+  .disc.player {
+    background: radial-gradient(circle at 35% 30%, #ffe066, #f4a300);
+  }
+  .disc.ai {
+    background: radial-gradient(circle at 35% 30%, #ff8fa3, #e5383b);
+  }
+  .col-hover {
+    background: #2a4a6b !important;
+  }
+  .ai-target {
+    animation: aiPulse 0.5s ease-in-out infinite;
+  }
+  @keyframes aiPulse {
+    0%, 100% { background: #1d3557; }
+    50% { background: #e5383b; }
+  }
+  #message {
+    margin-top: 18px;
+    font-size: 22px;
+    min-height: 30px;
+    text-align: center;
+  }
+  #controls {
+    margin-top: 15px;
+    display: flex;
+    gap: 15px;
+    align-items: center;
+  }
+  #restartBtn {
+    padding: 10px 24px;
+    font-size: 18px;
+    border: none;
+    border-radius: 8px;
+    background: #ef233c;
+    color: white;
+    cursor: pointer;
+  }
+  #restartBtn:hover { background: #d90429; }
+  #difficulty {
+    padding: 8px;
+    font-size: 16px;
+    border-radius: 6px;
+    border: none;
+  }
+  #thinking {
+    font-size: 14px;
+    color: #a8dadc;
+    min-height: 18px;
+    margin-top: 8px;
+  }
+
+  /* End card overlay */
+  #endOverlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+    z-index: 10;
+  }
+  #endOverlay.show {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  #endCard {
+    background: #2a4a6b;
+    padding: 36px 44px;
+    border-radius: 16px;
+    text-align: center;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    transform: scale(0.85);
+    opacity: 0;
+    transition: transform 0.3s ease, opacity 0.3s ease;
+    max-width: 320px;
+  }
+  #endOverlay.show #endCard {
+    transform: scale(1);
+    opacity: 1;
+  }
+  #endCardTitle {
+    font-size: 28px;
+    margin: 0 0 10px;
+  }
+  #endCardMsg {
+    font-size: 15px;
+    color: #d8e8ec;
+    margin: 0 0 6px;
+  }
+  #endCardScore {
+    font-size: 14px;
+    color: #a8dadc;
+    margin: 0 0 22px;
+  }
+  #playAgainBtn {
+    padding: 10px 28px;
+    font-size: 16px;
+    border: none;
+    border-radius: 8px;
+    background: #ffb703;
+    color: #1d3557;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  #playAgainBtn:hover { background: #ffc93c; }
+</style>
+</head>
+<body>
+
+<h1>🔴 Connect 4 vs AI 🟡</h1>
+<div id="subtitle">You're yellow. Beat the bot before the buzzer... wait, no buzzer, just beat the bot.</div>
+
+<div id="stats">
+  <div>You: <span id="playerWins">0</span></div>
+  <div>AI: <span id="aiWins">0</span></div>
+</div>
+
+<div id="board"></div>
+<div id="thinking"></div>
+<div id="message">Your move — click a column to drop a disc</div>
+
+<div id="controls">
+  <button id="restartBtn">New Game</button>
+  <select id="difficulty">
+    <option value="2">Easy</option>
+    <option value="4" selected>Medium</option>
+    <option value="6">Hard</option>
+  </select>
+</div>
+
+<div id="endOverlay">
+  <div id="endCard">
+    <div id="endCardTitle"></div>
+    <div id="endCardMsg"></div>
+    <div id="endCardScore"></div>
+    <button id="playAgainBtn">Play Again</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  const ROWS = 6;
+  const COLS = 7;
+  const EMPTY = 0;
+  const PLAYER = 1; // human = yellow
+  const AI = 2;     // bot = red
+  const CELL_STEP = 68; // 60px cell + 8px gap, used for drop animation distance
+
+  const boardEl = document.getElementById('board');
+  const messageEl = document.getElementById('message');
+  const thinkingEl = document.getElementById('thinking');
+  const restartBtn = document.getElementById('restartBtn');
+  const difficultySelect = document.getElementById('difficulty');
+  const playerWinsEl = document.getElementById('playerWins');
+  const aiWinsEl = document.getElementById('aiWins');
+  const endOverlay = document.getElementById('endOverlay');
+  const endCard = document.getElementById('endCard');
+  const endCardTitle = document.getElementById('endCardTitle');
+  const endCardMsg = document.getElementById('endCardMsg');
+  const endCardScore = document.getElementById('endCardScore');
+  const playAgainBtn = document.getElementById('playAgainBtn');
+
+  let board = []; // board[row][col], row 0 = top
+  let cells = [];
+  let gameOver = false;
+  let playerTurn = true;
+  let playerWins = 0;
+  let aiWins = 0;
+  let aiDepth = parseInt(difficultySelect.value, 10);
+
+  function createBoard() {
+    board = Array.from({ length: ROWS }, () => Array(COLS).fill(EMPTY));
+    boardEl.innerHTML = '';
+    cells = [];
+    for (let r = 0; r < ROWS; r++) {
+      const rowCells = [];
+      for (let c = 0; c < COLS; c++) {
+        const cell = document.createElement('div');
+        cell.classList.add('cell');
+        cell.dataset.row = r;
+        cell.dataset.col = c;
+        cell.addEventListener('click', () => handleColumnClick(c));
+        cell.addEventListener('mouseenter', () => highlightColumn(c, true));
+        cell.addEventListener('mouseleave', () => highlightColumn(c, false));
+        boardEl.appendChild(cell);
+        rowCells.push(cell);
+      }
+      cells.push(rowCells);
+    }
+  }
+
+  function highlightColumn(col, on) {
+    if (gameOver || !playerTurn) return;
+    for (let r = 0; r < ROWS; r++) {
+      cells[r][col].classList.toggle('col-hover', on && board[r][col] === EMPTY);
+    }
+  }
+
+  function setAiTargetColumn(col, on) {
+    for (let r = 0; r < ROWS; r++) {
+      if (board[r][col] === EMPTY) {
+        cells[r][col].classList.toggle('ai-target', on);
+      }
+    }
+  }
+
+  function getLowestEmptyRow(col) {
+    for (let r = ROWS - 1; r >= 0; r--) {
+      if (board[r][col] === EMPTY) return r;
+    }
+    return -1;
+  }
+
+  function dropDisc(col, player, animate) {
+    const row = getLowestEmptyRow(col);
+    if (row === -1) return -1;
+    board[row][col] = player;
+    renderCell(row, col, animate !== false);
+    return row;
+  }
+
+  function renderCell(r, c, animate) {
+    const cell = cells[r][c];
+    cell.innerHTML = '';
+    cell.classList.remove('col-hover', 'ai-target');
+    if (board[r][c] !== EMPTY) {
+      cell.classList.add('filled');
+      const disc = document.createElement('div');
+      disc.classList.add('disc', board[r][c] === PLAYER ? 'player' : 'ai');
+
+      if (animate) {
+        // Start the disc above the board and let it "fall" into place
+        const fallDistance = (r + 1) * CELL_STEP;
+        disc.style.transition = 'none';
+        disc.style.transform = `translateY(${-fallDistance}px)`;
+        cell.appendChild(disc);
+        // Force reflow so the browser registers the starting position
+        void disc.offsetWidth;
+        disc.style.transition = 'transform 0.45s cubic-bezier(0.55, 0.06, 0.95, 0.45)';
+        disc.style.transform = 'translateY(0)';
+      } else {
+        cell.appendChild(disc);
+      }
+    }
+  }
+
+  function checkWin(b, player) {
+    // horizontal
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c <= COLS - 4; c++) {
+        if (b[r][c] === player && b[r][c+1] === player && b[r][c+2] === player && b[r][c+3] === player) return true;
+      }
+    }
+    // vertical
+    for (let c = 0; c < COLS; c++) {
+      for (let r = 0; r <= ROWS - 4; r++) {
+        if (b[r][c] === player && b[r+1][c] === player && b[r+2][c] === player && b[r+3][c] === player) return true;
+      }
+    }
+    // diagonal down-right
+    for (let r = 0; r <= ROWS - 4; r++) {
+      for (let c = 0; c <= COLS - 4; c++) {
+        if (b[r][c] === player && b[r+1][c+1] === player && b[r+2][c+2] === player && b[r+3][c+3] === player) return true;
+      }
+    }
+    // diagonal up-right
+    for (let r = 3; r < ROWS; r++) {
+      for (let c = 0; c <= COLS - 4; c++) {
+        if (b[r][c] === player && b[r-1][c+1] === player && b[r-2][c+2] === player && b[r-3][c+3] === player) return true;
+      }
+    }
+    return false;
+  }
+
+  function isBoardFull(b) {
+    return b[0].every(cell => cell !== EMPTY);
+  }
+
+  function getValidCols(b) {
+    const valid = [];
+    for (let c = 0; c < COLS; c++) {
+      if (b[0][c] === EMPTY) valid.push(c);
+    }
+    return valid;
+  }
+
+  function cloneBoard(b) {
+    return b.map(row => row.slice());
+  }
+
+  function dropDiscSim(b, col, player) {
+    for (let r = ROWS - 1; r >= 0; r--) {
+      if (b[r][col] === EMPTY) {
+        b[r][col] = player;
+        return r;
+      }
+    }
+    return -1;
+  }
+
+  // --- Heuristic scoring for minimax ---
+  function scoreWindow(window, player) {
+    const opponent = player === PLAYER ? AI : PLAYER;
+    const countP = window.filter(v => v === player).length;
+    const countO = window.filter(v => v === opponent).length;
+    const countE = window.filter(v => v === EMPTY).length;
+
+    if (countP === 4) return 100000;
+    if (countP === 3 && countE === 1) return 50;
+    if (countP === 2 && countE === 2) return 10;
+    if (countO === 3 && countE === 1) return -80; // block opponent threats strongly
+    return 0;
+  }
+
+  function evaluateBoard(b, player) {
+    let score = 0;
+    // center column preference
+    const centerCol = Math.floor(COLS / 2);
+    for (let r = 0; r < ROWS; r++) {
+      if (b[r][centerCol] === player) score += 6;
+    }
+    // horizontal
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c <= COLS - 4; c++) {
+        score += scoreWindow([b[r][c], b[r][c+1], b[r][c+2], b[r][c+3]], player);
+      }
+    }
+    // vertical
+    for (let c = 0; c < COLS; c++) {
+      for (let r = 0; r <= ROWS - 4; r++) {
+        score += scoreWindow([b[r][c], b[r+1][c], b[r+2][c], b[r+3][c]], player);
+      }
+    }
+    // diagonal down-right
+    for (let r = 0; r <= ROWS - 4; r++) {
+      for (let c = 0; c <= COLS - 4; c++) {
+        score += scoreWindow([b[r][c], b[r+1][c+1], b[r+2][c+2], b[r+3][c+3]], player);
+      }
+    }
+    // diagonal up-right
+    for (let r = 3; r < ROWS; r++) {
+      for (let c = 0; c <= COLS - 4; c++) {
+        score += scoreWindow([b[r][c], b[r-1][c+1], b[r-2][c+2], b[r-3][c+3]], player);
+      }
+    }
+    return score;
+  }
+
+  function minimax(b, depth, alpha, beta, maximizing) {
+    const validCols = getValidCols(b);
+    const win4Player = checkWin(b, PLAYER);
+    const win4AI = checkWin(b, AI);
+
+    if (win4AI) return { score: 10000000 };
+    if (win4Player) return { score: -10000000 };
+    if (validCols.length === 0) return { score: 0 };
+    if (depth === 0) return { score: evaluateBoard(b, AI) };
+
+    if (maximizing) {
+      let best = { score: -Infinity, col: validCols[0] };
+      for (const col of validCols) {
+        const bCopy = cloneBoard(b);
+        dropDiscSim(bCopy, col, AI);
+        const result = minimax(bCopy, depth - 1, alpha, beta, false);
+        if (result.score > best.score) {
+          best = { score: result.score, col };
+        }
+        alpha = Math.max(alpha, result.score);
+        if (alpha >= beta) break;
+      }
+      return best;
+    } else {
+      let best = { score: Infinity, col: validCols[0] };
+      for (const col of validCols) {
+        const bCopy = cloneBoard(b);
+        dropDiscSim(bCopy, col, PLAYER);
+        const result = minimax(bCopy, depth - 1, alpha, beta, true);
+        if (result.score < best.score) {
+          best = { score: result.score, col };
+        }
+        beta = Math.min(beta, result.score);
+        if (alpha >= beta) break;
+      }
+      return best;
+    }
+  }
+
+  function aiMove() {
+    thinkingEl.textContent = 'AI is thinking...';
+
+    // Compute the move right away, but reveal it slowly so it's easy to follow
+    const result = minimax(board, aiDepth, -Infinity, Infinity, true);
+    let col = result.col;
+    if (col === undefined) {
+      const valid = getValidCols(board);
+      col = valid[Math.floor(Math.random() * valid.length)];
+    }
+
+    setTimeout(() => {
+      // Step 1: flash the column the AI is about to play
+      thinkingEl.textContent = `AI is eyeing column ${col + 1}...`;
+      setAiTargetColumn(col, true);
+
+      setTimeout(() => {
+        // Step 2: actually drop the disc, with a falling animation
+        setAiTargetColumn(col, false);
+        const row = dropDisc(col, AI, true);
+        thinkingEl.textContent = '';
+
+        setTimeout(() => {
+          if (checkWin(board, AI)) {
+            endGame('ai');
+            return;
+          }
+          if (isBoardFull(board)) {
+            endGame('draw');
+            return;
+          }
+          playerTurn = true;
+          messageEl.textContent = 'Your move — click a column';
+        }, 480); // let the drop animation finish before handing control back
+      }, 650); // how long the target column flashes before the drop
+    }, 500); // initial "thinking" pause
+  }
+
+  function handleColumnClick(col) {
+    if (gameOver || !playerTurn) return;
+    const row = dropDisc(col, PLAYER);
+    if (row === -1) return; // column full, ignore
+
+    if (checkWin(board, PLAYER)) {
+      endGame('player');
+      return;
+    }
+    if (isBoardFull(board)) {
+      endGame('draw');
+      return;
+    }
+
+    playerTurn = false;
+    messageEl.textContent = "AI's move...";
+    aiMove();
+  }
+
+  function endGame(result) {
+    gameOver = true;
+    let title, msg;
+    if (result === 'player') {
+      playerWins++;
+      playerWinsEl.textContent = playerWins;
+      title = '🎉 You Win!';
+      msg = 'Nice one — you connected four before the bot did.';
+      messageEl.textContent = '';
+    } else if (result === 'ai') {
+      aiWins++;
+      aiWinsEl.textContent = aiWins;
+      title = '🤖 AI Wins';
+      msg = 'The bot got there first. Fancy a rematch?';
+      messageEl.textContent = '';
+    } else {
+      title = "🤝 It's a Draw";
+      msg = 'The board filled up with no winner.';
+      messageEl.textContent = '';
+    }
+    showEndCard(title, msg);
+  }
+
+  function showEndCard(title, msg) {
+    endCardTitle.textContent = title;
+    endCardMsg.textContent = msg;
+    endCardScore.textContent = `Score — You ${playerWins} : ${aiWins} AI`;
+    endOverlay.classList.add('show');
+  }
+
+  function hideEndCard() {
+    endOverlay.classList.remove('show');
+  }
+
+  function restartGame() {
+    aiDepth = parseInt(difficultySelect.value, 10);
+    gameOver = false;
+    playerTurn = true;
+    hideEndCard();
+    createBoard();
+    messageEl.textContent = 'Your move — click a column to drop a disc';
+    thinkingEl.textContent = '';
+  }
+
+  restartBtn.addEventListener('click', restartGame);
+  difficultySelect.addEventListener('change', restartGame);
+  playAgainBtn.addEventListener('click', restartGame);
+  // Clicking the dimmed backdrop just dismisses the card without resetting
+  endOverlay.addEventListener('click', (e) => {
+    if (e.target === endOverlay) hideEndCard();
+  });
+
+  createBoard();
+})();
+</script>
+
+</body>
+</html>

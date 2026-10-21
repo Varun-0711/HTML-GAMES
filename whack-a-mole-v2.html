@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Whack-a-Mole</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #2b2d42;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    color: white;
+    padding: 20px;
+  }
+  h1 { margin-bottom: 0; }
+  #stats {
+    display: flex;
+    gap: 30px;
+    font-size: 20px;
+    margin: 10px 0 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  #stats span { font-weight: bold; }
+  #combo {
+    color: #ffd60a;
+  }
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(4, 90px);
+    grid-template-rows: repeat(4, 90px);
+    gap: 12px;
+  }
+  .hole {
+    background: #4a4e69;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 40px;
+    cursor: pointer;
+    user-select: none;
+    overflow: hidden;
+    transition: background 0.1s;
+  }
+  .hole.active {
+    background: #6a4c93;
+  }
+  .hole.bomb {
+    background: #8d0801;
+  }
+  .hole:active {
+    filter: brightness(1.3);
+  }
+  #startBtn {
+    margin-top: 25px;
+    padding: 12px 30px;
+    font-size: 20px;
+    border: none;
+    border-radius: 8px;
+    background: #ef233c;
+    color: white;
+    cursor: pointer;
+  }
+  #startBtn:hover { background: #d90429; }
+  #startBtn:disabled { background: #888; cursor: default; }
+  #message {
+    margin-top: 15px;
+    font-size: 22px;
+    min-height: 30px;
+    text-align: center;
+  }
+  #nameEntry {
+    margin-top: 10px;
+    display: none;
+    gap: 10px;
+  }
+  #nameEntry input {
+    padding: 8px;
+    font-size: 16px;
+    border-radius: 6px;
+    border: none;
+  }
+  #nameEntry button {
+    padding: 8px 16px;
+    font-size: 16px;
+    border-radius: 6px;
+    border: none;
+    background: #4cc9f0;
+    cursor: pointer;
+  }
+  #leaderboard {
+    margin-top: 25px;
+    background: #3a3d5c;
+    border-radius: 10px;
+    padding: 15px 25px;
+    min-width: 260px;
+  }
+  #leaderboard h2 {
+    margin: 0 0 10px;
+    font-size: 18px;
+    text-align: center;
+  }
+  #leaderboard ol {
+    margin: 0;
+    padding-left: 22px;
+  }
+  #leaderboard li {
+    font-size: 16px;
+    margin-bottom: 4px;
+  }
+  #leaderboard .empty {
+    text-align: center;
+    color: #aaa;
+    font-size: 14px;
+    list-style: none;
+  }
+</style>
+</head>
+<body>
+
+<h1>🔨 Whack-a-Mole</h1>
+<div id="stats">
+  <div>Score: <span id="score">0</span></div>
+  <div>Time: <span id="time">30</span>s</div>
+  <div id="combo">Combo: x1</div>
+</div>
+
+<div id="grid"></div>
+
+<button id="startBtn">Start Game</button>
+<div id="message"></div>
+
+<div id="nameEntry">
+  <input id="nameInput" type="text" maxlength="15" placeholder="Your name">
+  <button id="saveScoreBtn">Save Score</button>
+</div>
+
+<div id="leaderboard">
+  <h2>🏆 Top Scores</h2>
+  <ol id="leaderboardList">
+    <li class="empty">No scores yet</li>
+  </ol>
+</div>
+
+<script>
+(function () {
+  const GRID_SIZE = 16;
+  const GAME_DURATION = 30; // seconds
+  const MOLE_MIN_MS = 450;
+  const MOLE_MAX_MS = 850;
+  const BOMB_CHANCE = 0.22; // 22% of pops are bombs
+  const COMBO_WINDOW_MS = 1500; // whack within this window to keep combo alive
+  const MAX_COMBO_MULT = 5;
+  const MAX_LEADERBOARD = 5;
+
+  const grid = document.getElementById('grid');
+  const scoreEl = document.getElementById('score');
+  const timeEl = document.getElementById('time');
+  const comboEl = document.getElementById('combo');
+  const startBtn = document.getElementById('startBtn');
+  const messageEl = document.getElementById('message');
+  const nameEntry = document.getElementById('nameEntry');
+  const nameInput = document.getElementById('nameInput');
+  const saveScoreBtn = document.getElementById('saveScoreBtn');
+  const leaderboardList = document.getElementById('leaderboardList');
+
+  let holes = [];
+  let score = 0;
+  let timeLeft = GAME_DURATION;
+  let activeHoleIndex = -1;
+  let activeIsBomb = false;
+  let moleTimeoutId = null;
+  let countdownIntervalId = null;
+  let gameRunning = false;
+
+  let combo = 1;
+  let lastWhackTime = 0;
+
+  let leaderboard = []; // { name, score }, in-memory only (resets on page refresh)
+
+  // --- Audio: simple generated beeps, no external files, nothing to fail to load ---
+  let audioCtx = null;
+  function getAudioCtx() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    return audioCtx;
+  }
+  function playTone(freq, durationMs, type) {
+    try {
+      const ctx = getAudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type || 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + durationMs / 1000);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + durationMs / 1000);
+    } catch (e) {
+      // audio not available, fail silently, game still works
+    }
+  }
+  function playWhackSound() { playTone(880, 90, 'square'); }
+  function playBombSound() { playTone(120, 300, 'sawtooth'); }
+  function playMissSound() { playTone(220, 120, 'triangle'); }
+
+  function randomInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  // Build the grid of holes once
+  for (let i = 0; i < GRID_SIZE; i++) {
+    const hole = document.createElement('div');
+    hole.classList.add('hole');
+    hole.dataset.index = i;
+    hole.addEventListener('click', () => whack(i));
+    grid.appendChild(hole);
+    holes.push(hole);
+  }
+
+  function updateComboDisplay() {
+    comboEl.textContent = `Combo: x${combo}`;
+  }
+
+  function showMole() {
+    if (!gameRunning) return;
+
+    // clear previous mole/bomb visuals
+    if (activeHoleIndex !== -1) {
+      holes[activeHoleIndex].classList.remove('active', 'bomb');
+      holes[activeHoleIndex].textContent = '';
+    }
+
+    activeHoleIndex = randomInt(0, GRID_SIZE - 1);
+    activeIsBomb = Math.random() < BOMB_CHANCE;
+
+    if (activeIsBomb) {
+      holes[activeHoleIndex].classList.add('bomb');
+      holes[activeHoleIndex].textContent = '💣';
+    } else {
+      holes[activeHoleIndex].classList.add('active');
+      holes[activeHoleIndex].textContent = '🐹';
+    }
+
+    const delay = randomInt(MOLE_MIN_MS, MOLE_MAX_MS);
+    moleTimeoutId = setTimeout(showMole, delay);
+  }
+
+  function whack(index) {
+    if (!gameRunning) return;
+    if (index !== activeHoleIndex) return; // clicked an empty hole, no effect
+
+    const now = Date.now();
+
+    if (activeIsBomb) {
+      // hitting a bomb costs points and resets combo
+      score = Math.max(0, score - 3);
+      combo = 1;
+      playBombSound();
+      holes[index].classList.remove('bomb');
+      holes[index].textContent = '💥';
+    } else {
+      // combo logic: whack fast enough to keep/build combo, otherwise reset
+      if (now - lastWhackTime <= COMBO_WINDOW_MS) {
+        combo = Math.min(MAX_COMBO_MULT, combo + 1);
+      } else {
+        combo = 1;
+      }
+      lastWhackTime = now;
+
+      score += combo;
+      playWhackSound();
+      holes[index].classList.remove('active');
+      holes[index].textContent = '✨';
+    }
+
+    scoreEl.textContent = score;
+    updateComboDisplay();
+    activeHoleIndex = -1;
+
+    setTimeout(() => {
+      if (holes[index].textContent === '💥' || holes[index].textContent === '✨') {
+        holes[index].textContent = '';
+      }
+    }, 150);
+  }
+
+  function tickCountdown() {
+    timeLeft--;
+    timeEl.textContent = timeLeft;
+    if (timeLeft <= 0) {
+      endGame();
+    }
+  }
+
+  function startGame() {
+    score = 0;
+    timeLeft = GAME_DURATION;
+    combo = 1;
+    lastWhackTime = 0;
+    scoreEl.textContent = score;
+    timeEl.textContent = timeLeft;
+    updateComboDisplay();
+    messageEl.textContent = '';
+    nameEntry.style.display = 'none';
+    gameRunning = true;
+    startBtn.disabled = true;
+    startBtn.textContent = 'Playing...';
+
+    holes.forEach(h => { h.classList.remove('active', 'bomb'); h.textContent = ''; });
+
+    showMole();
+    countdownIntervalId = setInterval(tickCountdown, 1000);
+  }
+
+  function endGame() {
+    gameRunning = false;
+    clearTimeout(moleTimeoutId);
+    clearInterval(countdownIntervalId);
+    moleTimeoutId = null;
+    countdownIntervalId = null;
+
+    if (activeHoleIndex !== -1) {
+      holes[activeHoleIndex].classList.remove('active', 'bomb');
+      holes[activeHoleIndex].textContent = '';
+      activeHoleIndex = -1;
+    }
+
+    startBtn.disabled = false;
+    startBtn.textContent = 'Play Again';
+    messageEl.textContent = `Time's up! Final score: ${score}`;
+
+    // offer to save score if it would make the leaderboard (or board isn't full yet)
+    if (leaderboard.length < MAX_LEADERBOARD || score > leaderboard[leaderboard.length - 1].score) {
+      nameEntry.style.display = 'flex';
+      nameInput.value = '';
+      nameInput.focus();
+    }
+  }
+
+  function renderLeaderboard() {
+    leaderboardList.innerHTML = '';
+    if (leaderboard.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'empty';
+      li.textContent = 'No scores yet';
+      leaderboardList.appendChild(li);
+      return;
+    }
+    leaderboard.forEach(entry => {
+      const li = document.createElement('li');
+      li.textContent = `${entry.name} — ${entry.score}`;
+      leaderboardList.appendChild(li);
+    });
+  }
+
+  function saveScore() {
+    const name = nameInput.value.trim() || 'Anonymous';
+    leaderboard.push({ name, score });
+    leaderboard.sort((a, b) => b.score - a.score);
+    leaderboard = leaderboard.slice(0, MAX_LEADERBOARD);
+    renderLeaderboard();
+    nameEntry.style.display = 'none';
+    messageEl.textContent = `Saved! Final score: ${score}`;
+  }
+
+  startBtn.addEventListener('click', startGame);
+  saveScoreBtn.addEventListener('click', saveScore);
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveScore();
+  });
+
+  renderLeaderboard();
+})();
+</script>
+
+</body>
+</html>
